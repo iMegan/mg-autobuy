@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoBuy
 // @namespace    Quinoa
-// @version      2.0.0
+// @version      2.0.1
 // @description  AutoBuy for Magic Garden
 // @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
@@ -47408,22 +47408,14 @@ var COMMITS_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/c
     installSeedSiloKeybindsOnce();
     installDecorShedKeybindsOnce();
     const bootToolbar = async () => {
-      try {
-        await renderOverlay();
-      } catch (e) {
-        console.error("[HUD] renderOverlay failed:", e);
-      }
-      try {
-        await renderCommunityHub();
-      } catch (e) {
-        console.error("[HUD] renderCommunityHub failed:", e);
-      }
-    };
-    if (document.head) {
-      bootToolbar();
-    } else {
-      document.addEventListener("DOMContentLoaded", () => bootToolbar(), { once: true });
-    }
+  // Notifications overlay disabled
+  // Community Hub disabled
+};
+if (document.head) {
+  bootToolbar();
+} else {
+  document.addEventListener("DOMContentLoaded", () => bootToolbar(), { once: true });
+}
     (async () => {
       try {
         await PetAlertService.start();
