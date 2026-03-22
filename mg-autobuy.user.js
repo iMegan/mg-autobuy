@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoBuy
 // @namespace    Quinoa
-// @version      2.0.0
+// @version      2.0.1
 // @description  AutoBuy for Magic Garden
 // @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
@@ -47478,26 +47478,46 @@ var COMMITS_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/c
 
 const AUTO_BUY_SETTINGS_KEY = "ariesmod_auto_buy_settings_v7";
 
+const AUTO_BUY_TOOL_CATALOG = [
+  "WateringCan",
+  "PlanterPot",
+  "CropCleanser"
+];
+
+const AUTO_BUY_EGG_CATALOG = [
+  "CommonEgg",
+  "UncommonEgg",
+  "RareEgg",
+  "LegendaryEgg",
+  "MythicalEgg",
+  "SnowEgg"
+];
+
 const AUTO_BUY_DEFAULTS = {
   enabled: true,
 
   seedsEnabled: true,
   eggsEnabled: true,
+  toolsEnabled: true,
 
-  pollIntervalMs: 60 * 1000, // 1 minute fallback check
-  minPurchaseGapMs: 1500,    // small anti-spam delay between buys
+  pollIntervalMs: 60 * 1000,
+  minPurchaseGapMs: 1500,
 
   seeds: [],
   eggs: [],
+  tools: [],
 
   seenSeeds: {},
   seenEggs: {},
+  seenTools: {},
 
   lastSeedFingerprint: "",
   lastEggFingerprint: "",
+  lastToolFingerprint: "",
 
   lastSeedCheckAt: 0,
   lastEggCheckAt: 0,
+  lastToolCheckAt: 0,
   lastPurchaseAt: 0
 };
 
@@ -47511,8 +47531,10 @@ function loadAutoBuySettings() {
           ...raw,
           seeds: Array.isArray(raw.seeds) ? raw.seeds.map(String) : [],
           eggs: Array.isArray(raw.eggs) ? raw.eggs.map(String) : [],
+          tools: Array.isArray(raw.tools) ? raw.tools.map(String) : [],
           seenSeeds: raw.seenSeeds && typeof raw.seenSeeds === "object" ? raw.seenSeeds : {},
-          seenEggs: raw.seenEggs && typeof raw.seenEggs === "object" ? raw.seenEggs : {}
+          seenEggs: raw.seenEggs && typeof raw.seenEggs === "object" ? raw.seenEggs : {},
+          seenTools: raw.seenTools && typeof raw.seenTools === "object" ? raw.seenTools : {}
         };
       }
     }
@@ -47533,18 +47555,12 @@ function saveAutoBuySettings(settings) {
 }
 
 const autoBuySettings = loadAutoBuySettings();
-    const AUTO_BUY_EGG_CATALOG = [
-  "CommonEgg",
-  "UncommonEgg",
-  "RareEgg",
-  "LegendaryEgg",
-  "MythicalEgg",
-  "SnowEgg"
-];
 
 const autoBuyRuntime = {
   inFlightSeeds: {},
-  inFlightEggs: {}
+  inFlightEggs: {},
+  inFlightTools: {},
+  pollingStarted: false
 };
 
 function sleep(ms) {
@@ -47591,6 +47607,26 @@ function normalizeEggInventory(rawShop) {
     .filter((item) => item.stock > 0);
 }
 
+function normalizeToolInventory(rawShop) {
+  const inventory = Array.isArray(rawShop?.inventory) ? rawShop.inventory : [];
+  return inventory
+    .map((entry) => {
+      const toolId = entry?.toolId ? String(entry.toolId) : null;
+      if (!toolId) return null;
+
+      const initialStock = Number(entry?.initialStock ?? entry?.stock);
+      const stock = Number.isFinite(initialStock) ? Math.floor(initialStock) : 0;
+
+      return {
+        id: toolId,
+        stock: stock > 0 ? stock : 0,
+        raw: entry
+      };
+    })
+    .filter(Boolean)
+    .filter((item) => item.stock > 0);
+}
+
 function makeShopFingerprint(items) {
   return JSON.stringify(
     items
@@ -47621,6 +47657,17 @@ function resetSeenIfFingerprintChanged(type, newFingerprint) {
       autoBuyRuntime.inFlightEggs = {};
       saveAutoBuySettings(autoBuySettings);
       console.log("[AutoBuy] egg restock changed");
+    }
+    return;
+  }
+
+  if (type === "tool") {
+    if (autoBuySettings.lastToolFingerprint !== newFingerprint) {
+      autoBuySettings.lastToolFingerprint = newFingerprint;
+      autoBuySettings.seenTools = {};
+      autoBuyRuntime.inFlightTools = {};
+      saveAutoBuySettings(autoBuySettings);
+      console.log("[AutoBuy] tool restock changed");
     }
   }
 }
@@ -47662,6 +47709,22 @@ async function autoBuyEggById(eggId, amount) {
       saveAutoBuySettings(autoBuySettings);
     } catch (err) {
       console.warn("[AutoBuy] egg purchase failed", { eggId, attempt: i + 1, err });
+      break;
+    }
+  }
+}
+
+async function autoBuyToolById(toolId, amount) {
+  const total = Math.max(1, Math.floor(amount || 1));
+
+  for (let i = 0; i < total; i += 1) {
+    try {
+      await waitPurchaseGap();
+      await PlayerService.purchaseTool(toolId);
+      autoBuySettings.lastPurchaseAt = Date.now();
+      saveAutoBuySettings(autoBuySettings);
+    } catch (err) {
+      console.warn("[AutoBuy] tool purchase failed", { toolId, attempt: i + 1, err });
       break;
     }
   }
@@ -47781,6 +47844,64 @@ async function handleEggAutoBuy(rawShop, source = "unknown") {
   }
 }
 
+async function handleToolAutoBuy(rawShop, source = "unknown") {
+  if (!autoBuySettings.enabled || !autoBuySettings.toolsEnabled) return;
+
+  autoBuySettings.lastToolCheckAt = Date.now();
+
+  const items = normalizeToolInventory(rawShop);
+  const fingerprint = makeShopFingerprint(items);
+  resetSeenIfFingerprintChanged("tool", fingerprint);
+
+  const wanted = new Set((autoBuySettings.tools || []).map(String));
+  if (!wanted.size) return;
+
+  for (const item of items) {
+    if (!wanted.has(item.id)) continue;
+    if (autoBuySettings.seenTools[item.id]) continue;
+    if (autoBuyRuntime.inFlightTools[item.id]) continue;
+
+    const amountToBuy = item.stock;
+
+    autoBuyRuntime.inFlightTools[item.id] = true;
+    autoBuySettings.seenTools[item.id] = true;
+    saveAutoBuySettings(autoBuySettings);
+
+    console.log("[AutoBuy] wanted tool found", {
+      id: item.id,
+      stock: item.stock,
+      amountToBuy,
+      source
+    });
+
+    try {
+      await autoBuyToolById(item.id, amountToBuy);
+
+      try {
+        const label = toolCatalog?.[item.id]?.name ?? item.id;
+        await toastSimple(
+          "Auto-buy",
+          `Bought tool: ${label}${amountToBuy > 1 ? ` x${amountToBuy}` : ""}`,
+          "success",
+          3500
+        );
+      } catch {}
+
+      console.log("[AutoBuy] bought tool", {
+        id: item.id,
+        amount: amountToBuy,
+        source
+      });
+    } catch (err) {
+      delete autoBuySettings.seenTools[item.id];
+      saveAutoBuySettings(autoBuySettings);
+      console.warn("[AutoBuy] failed during tool auto-buy", item.id, err);
+    } finally {
+      delete autoBuyRuntime.inFlightTools[item.id];
+    }
+  }
+}
+
 async function checkSeedShop(source = "poll") {
   try {
     const shop = await Atoms.shop.seedShop.get();
@@ -47799,12 +47920,25 @@ async function checkEggShop(source = "poll") {
   }
 }
 
+async function checkToolShop(source = "poll") {
+  try {
+    const shop = await Atoms.shop.toolShop.get();
+    await handleToolAutoBuy(shop, source);
+  } catch (err) {
+    console.warn("[AutoBuy] tool shop check failed", err);
+  }
+}
+
 function startAutoBuyPolling() {
+  if (autoBuyRuntime.pollingStarted) return;
+  autoBuyRuntime.pollingStarted = true;
+
   const interval = Math.max(10_000, Number(autoBuySettings.pollIntervalMs || 60_000));
 
   setInterval(() => {
     checkSeedShop("poll");
     checkEggShop("poll");
+    checkToolShop("poll");
   }, interval);
 
   console.log("[AutoBuy] polling started", { interval });
@@ -47815,6 +47949,7 @@ async function initAutoBuyShops() {
 
   await checkSeedShop("init");
   await checkEggShop("init");
+  await checkToolShop("init");
 
   try {
     await Atoms.shop.seedShop.onChange(async (next) => {
@@ -47830,6 +47965,14 @@ async function initAutoBuyShops() {
     });
   } catch (err) {
     console.warn("[AutoBuy] failed to subscribe to egg shop", err);
+  }
+
+  try {
+    await Atoms.shop.toolShop.onChange(async (next) => {
+      await handleToolAutoBuy(next, "toolShop.onChange");
+    });
+  } catch (err) {
+    console.warn("[AutoBuy] failed to subscribe to tool shop", err);
   }
 
   startAutoBuyPolling();
@@ -59524,7 +59667,7 @@ next: ${next}`;
     view.appendChild(layout);
     refreshBackupList(controlStatus, backupListHolder);
   }
-  function renderAutoBuyTab(view, ui) {
+function renderAutoBuyTab(view, ui) {
   view.innerHTML = "";
 
   const layout = document.createElement("div");
@@ -59533,7 +59676,7 @@ next: ${next}`;
   layout.style.gap = "12px";
 
   const autoBuyCard = ui.card("Auto-buy", {
-    description: "Enable or disable auto-buy and choose exactly which eggs or seeds should be purchased."
+    description: "Enable or disable auto-buy and choose exactly which eggs, seeds, or Tool Shop items should be purchased."
   });
 
   autoBuyCard.body.style.display = "flex";
@@ -59610,13 +59753,25 @@ next: ${next}`;
     return [...new Set((values || []).filter(Boolean).map((v) => String(v)))];
   }
 
+  function getAutoBuyTargetListByKind(kind) {
+    if (kind === "egg") return autoBuySettings.eggs;
+    if (kind === "tool") return autoBuySettings.tools;
+    return autoBuySettings.seeds;
+  }
+
+  function getAutoBuyTargetLabel(kind, id) {
+    if (kind === "tool") return toolCatalog?.[id]?.name ?? String(id);
+    if (kind === "egg") return eggCatalog?.[id]?.name ?? String(id);
+    if (kind === "seed") return plantCatalog?.[id]?.seed?.name ?? String(id);
+    return String(id);
+  }
+
   function isAutoBuyTargetEnabled(kind, id) {
-    const list = kind === "egg" ? autoBuySettings.eggs : autoBuySettings.seeds;
-    return uniqueStrings(list).includes(String(id));
+    return uniqueStrings(getAutoBuyTargetListByKind(kind)).includes(String(id));
   }
 
   function toggleAutoBuyTarget(kind, id) {
-    const key = kind === "egg" ? "eggs" : "seeds";
+    const key = kind === "egg" ? "eggs" : kind === "tool" ? "tools" : "seeds";
     const current = uniqueStrings(autoBuySettings[key]);
     const value = String(id);
 
@@ -59637,35 +59792,47 @@ next: ${next}`;
       if (kind === "seed" || kind === "both") {
         await checkSeedShop("autobuy-ui");
       }
+      if (kind === "tool" || kind === "both") {
+        await checkToolShop("autobuy-ui");
+      }
     } catch (err) {
       console.warn("[AutoBuy UI] manual check failed", err);
     }
   }
 
   async function getAutoBuyUiOptions(kind) {
-    const selected = uniqueStrings(kind === "egg" ? autoBuySettings.eggs : autoBuySettings.seeds);
+    const selected = uniqueStrings(getAutoBuyTargetListByKind(kind));
 
     let shopIds = [];
     try {
       const shop = kind === "egg"
         ? await Atoms.shop.eggShop.get()
-        : await Atoms.shop.seedShop.get();
+        : kind === "tool"
+          ? await Atoms.shop.toolShop.get()
+          : await Atoms.shop.seedShop.get();
 
       const inventory = Array.isArray(shop?.inventory) ? shop.inventory : [];
       shopIds = inventory
-        .map((entry) => kind === "egg" ? entry?.eggId : entry?.species)
+        .map((entry) => {
+          if (kind === "egg") return entry?.eggId;
+          if (kind === "tool") return entry?.toolId;
+          return entry?.species;
+        })
         .filter(Boolean)
         .map(String);
     } catch (err) {
       console.warn("[AutoBuy UI] failed to read shop options", { kind, err });
     }
 
-    const eggCatalog = ["CommonEgg", "UncommonEgg", "RareEgg", "LegendaryEgg", "MythicalEgg"];
-    const seedCatalog = typeof plantCatalog === "object" && plantCatalog
+    const seedCatalogIds = typeof plantCatalog === "object" && plantCatalog
       ? Object.keys(plantCatalog).map(String)
       : [];
 
-    const baseCatalog = kind === "egg" ? eggCatalog : seedCatalog;
+    const baseCatalog = kind === "egg"
+      ? AUTO_BUY_EGG_CATALOG
+      : kind === "tool"
+        ? AUTO_BUY_TOOL_CATALOG
+        : seedCatalogIds;
 
     const merged = uniqueStrings([
       ...baseCatalog,
@@ -59734,6 +59901,23 @@ next: ${next}`;
     }
   );
 
+  const toolsRow = createAutoBuyRow(
+    "Tool auto-buy",
+    autoBuySettings.toolsEnabled ? "On" : "Off",
+    async () => {
+      autoBuySettings.toolsEnabled = !autoBuySettings.toolsEnabled;
+      saveAutoBuySettings(autoBuySettings);
+      toolsRow.button.textContent = autoBuySettings.toolsEnabled ? "On" : "Off";
+      showStatus(autoBuyStatus, {
+        success: true,
+        message: `Tool auto-buy ${autoBuySettings.toolsEnabled ? "enabled" : "disabled"}.`
+      });
+      if (autoBuySettings.enabled && autoBuySettings.toolsEnabled) {
+        await runAutoBuyCheckFromUi("tool");
+      }
+    }
+  );
+
   const refreshOptionsButton = createActionButton("Refresh shop options");
   refreshOptionsButton.style.width = "100%";
   refreshOptionsButton.style.boxSizing = "border-box";
@@ -59752,6 +59936,13 @@ next: ${next}`;
   seedsChips.style.flexWrap = "wrap";
   seedsChips.style.gap = "8px";
 
+  const toolsTitle = createAutoBuySectionTitle("Tool Shop targets");
+  const toolsHint = createAutoBuyHint("Enabled Tool Shop items will be bought automatically in full whenever they appear in stock.");
+  const toolsChips = document.createElement("div");
+  toolsChips.style.display = "flex";
+  toolsChips.style.flexWrap = "wrap";
+  toolsChips.style.gap = "8px";
+
   async function renderAutoBuyChips() {
     refreshOptionsButton.disabled = true;
     refreshOptionsButton.textContent = "Refreshing...";
@@ -59759,9 +59950,11 @@ next: ${next}`;
     try {
       const eggOptions = await getAutoBuyUiOptions("egg");
       const seedOptions = await getAutoBuyUiOptions("seed");
+      const toolOptions = await getAutoBuyUiOptions("tool");
 
       eggsChips.innerHTML = "";
       seedsChips.innerHTML = "";
+      toolsChips.innerHTML = "";
 
       if (!eggOptions.length) {
         const empty = document.createElement("div");
@@ -59772,14 +59965,14 @@ next: ${next}`;
       } else {
         eggOptions.forEach((id) => {
           const chip = createChipButton(
-            id,
+            getAutoBuyTargetLabel("egg", id),
             isAutoBuyTargetEnabled("egg", id),
             async () => {
               toggleAutoBuyTarget("egg", id);
               await renderAutoBuyChips();
               showStatus(autoBuyStatus, {
                 success: true,
-                message: `${id} ${isAutoBuyTargetEnabled("egg", id) ? "enabled" : "disabled"} for egg auto-buy.`
+                message: `${getAutoBuyTargetLabel("egg", id)} ${isAutoBuyTargetEnabled("egg", id) ? "enabled" : "disabled"} for egg auto-buy.`
               });
               if (autoBuySettings.enabled && autoBuySettings.eggsEnabled && isAutoBuyTargetEnabled("egg", id)) {
                 await runAutoBuyCheckFromUi("egg");
@@ -59799,14 +59992,14 @@ next: ${next}`;
       } else {
         seedOptions.forEach((id) => {
           const chip = createChipButton(
-            id,
+            getAutoBuyTargetLabel("seed", id),
             isAutoBuyTargetEnabled("seed", id),
             async () => {
               toggleAutoBuyTarget("seed", id);
               await renderAutoBuyChips();
               showStatus(autoBuyStatus, {
                 success: true,
-                message: `${id} ${isAutoBuyTargetEnabled("seed", id) ? "enabled" : "disabled"} for seed auto-buy.`
+                message: `${getAutoBuyTargetLabel("seed", id)} ${isAutoBuyTargetEnabled("seed", id) ? "enabled" : "disabled"} for seed auto-buy.`
               });
               if (autoBuySettings.enabled && autoBuySettings.seedsEnabled && isAutoBuyTargetEnabled("seed", id)) {
                 await runAutoBuyCheckFromUi("seed");
@@ -59814,6 +60007,33 @@ next: ${next}`;
             }
           );
           seedsChips.appendChild(chip);
+        });
+      }
+
+      if (!toolOptions.length) {
+        const empty = document.createElement("div");
+        empty.textContent = "No tool options found.";
+        empty.style.opacity = "0.6";
+        empty.style.fontSize = "12px";
+        toolsChips.appendChild(empty);
+      } else {
+        toolOptions.forEach((id) => {
+          const chip = createChipButton(
+            getAutoBuyTargetLabel("tool", id),
+            isAutoBuyTargetEnabled("tool", id),
+            async () => {
+              toggleAutoBuyTarget("tool", id);
+              await renderAutoBuyChips();
+              showStatus(autoBuyStatus, {
+                success: true,
+                message: `${getAutoBuyTargetLabel("tool", id)} ${isAutoBuyTargetEnabled("tool", id) ? "enabled" : "disabled"} for tool auto-buy.`
+              });
+              if (autoBuySettings.enabled && autoBuySettings.toolsEnabled && isAutoBuyTargetEnabled("tool", id)) {
+                await runAutoBuyCheckFromUi("tool");
+              }
+            }
+          );
+          toolsChips.appendChild(chip);
         });
       }
     } finally {
@@ -59834,6 +60054,7 @@ next: ${next}`;
     masterRow.row,
     seedsRow.row,
     eggsRow.row,
+    toolsRow.row,
     refreshOptionsButton,
     eggsTitle,
     eggsHint,
@@ -59841,6 +60062,9 @@ next: ${next}`;
     seedsTitle,
     seedsHint,
     seedsChips,
+    toolsTitle,
+    toolsHint,
+    toolsChips,
     autoBuyStatus
   );
 
