@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoBuy
 // @namespace    Quinoa
-// @version      2.0.1
+// @version      2.0.2
 // @description  AutoBuy for Magic Garden
 // @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
@@ -59703,28 +59703,40 @@ function renderAutoBuyTab(view, ui) {
     return el;
   }
 
-  function createAutoBuyRow(labelText, buttonText, onClick) {
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.alignItems = "center";
-    row.style.justifyContent = "space-between";
-    row.style.gap = "10px";
-    row.style.padding = "10px 12px";
-    row.style.borderRadius = "10px";
-    row.style.border = "1px solid rgba(255,255,255,0.08)";
-    row.style.background = "rgba(255,255,255,0.02)";
+function createCompactToggleButton(labelText, active, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.style.borderRadius = "999px";
+  btn.style.border = active ? "1px solid #7aa2ff" : "1px solid rgba(255,255,255,0.14)";
+  btn.style.background = active ? "rgba(68, 119, 255, 0.22)" : "rgba(255,255,255,0.04)";
+  btn.style.color = "inherit";
+  btn.style.fontWeight = active ? "700" : "600";
+  btn.style.fontSize = "11px";
+btn.style.padding = "5px 8px";
+  btn.style.cursor = "pointer";
+  btn.style.transition = "background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease";
+  btn.style.whiteSpace = "nowrap";
+  btn.textContent = `${labelText}: ${active ? "ON" : "OFF"}`;
 
-    const label = document.createElement("div");
-    label.textContent = labelText;
-    label.style.fontSize = "13px";
-    label.style.fontWeight = "600";
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = active ? "rgba(68, 119, 255, 0.30)" : "rgba(255,255,255,0.08)";
+  });
 
-    const button = createActionButton(buttonText);
-    button.addEventListener("click", onClick);
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = active ? "rgba(68, 119, 255, 0.22)" : "rgba(255,255,255,0.04)";
+  });
 
-    row.append(label, button);
-    return { row, button, label };
-  }
+  btn.addEventListener("click", onClick);
+
+  return btn;
+}
+
+function updateCompactToggleButton(btn, labelText, active) {
+  btn.style.border = active ? "1px solid #7aa2ff" : "1px solid rgba(255,255,255,0.14)";
+  btn.style.background = active ? "rgba(68, 119, 255, 0.22)" : "rgba(255,255,255,0.04)";
+  btn.style.fontWeight = active ? "700" : "600";
+  btn.textContent = `${labelText}: ${active ? "ON" : "OFF"}`;
+}
 
   function createChipButton(labelText, active, onClick) {
     const btn = document.createElement("button");
@@ -59850,73 +59862,94 @@ function renderAutoBuyTab(view, ui) {
     ];
   }
 
-  const masterRow = createAutoBuyRow(
-    "Auto-buy master",
-    autoBuySettings.enabled ? "On" : "Off",
-    async () => {
-      autoBuySettings.enabled = !autoBuySettings.enabled;
-      saveAutoBuySettings(autoBuySettings);
-      masterRow.button.textContent = autoBuySettings.enabled ? "On" : "Off";
-      showStatus(autoBuyStatus, {
-        success: true,
-        message: `Auto-buy ${autoBuySettings.enabled ? "enabled" : "disabled"}.`
-      });
-      if (autoBuySettings.enabled) {
-        await runAutoBuyCheckFromUi("both");
-      }
-    }
-  );
+const toggleRow = document.createElement("div");
+toggleRow.style.display = "flex";
+toggleRow.style.flexWrap = "wrap";
+toggleRow.style.gap = "8px";
+toggleRow.style.alignItems = "center";
 
-  const seedsRow = createAutoBuyRow(
-    "Seed auto-buy",
-    autoBuySettings.seedsEnabled ? "On" : "Off",
-    async () => {
-      autoBuySettings.seedsEnabled = !autoBuySettings.seedsEnabled;
-      saveAutoBuySettings(autoBuySettings);
-      seedsRow.button.textContent = autoBuySettings.seedsEnabled ? "On" : "Off";
-      showStatus(autoBuyStatus, {
-        success: true,
-        message: `Seed auto-buy ${autoBuySettings.seedsEnabled ? "enabled" : "disabled"}.`
-      });
-      if (autoBuySettings.enabled && autoBuySettings.seedsEnabled) {
-        await runAutoBuyCheckFromUi("seed");
-      }
-    }
-  );
+const masterToggle = createCompactToggleButton(
+  "AutoBuy",
+  autoBuySettings.enabled,
+  async () => {
+    autoBuySettings.enabled = !autoBuySettings.enabled;
+    saveAutoBuySettings(autoBuySettings);
+    updateCompactToggleButton(masterToggle, "AutoBuy", autoBuySettings.enabled);
 
-  const eggsRow = createAutoBuyRow(
-    "Egg auto-buy",
-    autoBuySettings.eggsEnabled ? "On" : "Off",
-    async () => {
-      autoBuySettings.eggsEnabled = !autoBuySettings.eggsEnabled;
-      saveAutoBuySettings(autoBuySettings);
-      eggsRow.button.textContent = autoBuySettings.eggsEnabled ? "On" : "Off";
-      showStatus(autoBuyStatus, {
-        success: true,
-        message: `Egg auto-buy ${autoBuySettings.eggsEnabled ? "enabled" : "disabled"}.`
-      });
-      if (autoBuySettings.enabled && autoBuySettings.eggsEnabled) {
-        await runAutoBuyCheckFromUi("egg");
-      }
-    }
-  );
+    showStatus(autoBuyStatus, {
+      success: true,
+      message: `Auto-buy ${autoBuySettings.enabled ? "enabled" : "disabled"}.`
+    });
 
-  const toolsRow = createAutoBuyRow(
-    "Tool auto-buy",
-    autoBuySettings.toolsEnabled ? "On" : "Off",
-    async () => {
-      autoBuySettings.toolsEnabled = !autoBuySettings.toolsEnabled;
-      saveAutoBuySettings(autoBuySettings);
-      toolsRow.button.textContent = autoBuySettings.toolsEnabled ? "On" : "Off";
-      showStatus(autoBuyStatus, {
-        success: true,
-        message: `Tool auto-buy ${autoBuySettings.toolsEnabled ? "enabled" : "disabled"}.`
-      });
-      if (autoBuySettings.enabled && autoBuySettings.toolsEnabled) {
-        await runAutoBuyCheckFromUi("tool");
-      }
+    if (autoBuySettings.enabled) {
+      await runAutoBuyCheckFromUi("both");
     }
-  );
+  }
+);
+
+const seedsToggle = createCompactToggleButton(
+  "Seeds",
+  autoBuySettings.seedsEnabled,
+  async () => {
+    autoBuySettings.seedsEnabled = !autoBuySettings.seedsEnabled;
+    saveAutoBuySettings(autoBuySettings);
+    updateCompactToggleButton(seedsToggle, "Seeds", autoBuySettings.seedsEnabled);
+
+    showStatus(autoBuyStatus, {
+      success: true,
+      message: `Seed auto-buy ${autoBuySettings.seedsEnabled ? "enabled" : "disabled"}.`
+    });
+
+    if (autoBuySettings.enabled && autoBuySettings.seedsEnabled) {
+      await runAutoBuyCheckFromUi("seed");
+    }
+  }
+);
+
+const eggsToggle = createCompactToggleButton(
+  "Eggs",
+  autoBuySettings.eggsEnabled,
+  async () => {
+    autoBuySettings.eggsEnabled = !autoBuySettings.eggsEnabled;
+    saveAutoBuySettings(autoBuySettings);
+    updateCompactToggleButton(eggsToggle, "Eggs", autoBuySettings.eggsEnabled);
+
+    showStatus(autoBuyStatus, {
+      success: true,
+      message: `Egg auto-buy ${autoBuySettings.eggsEnabled ? "enabled" : "disabled"}.`
+    });
+
+    if (autoBuySettings.enabled && autoBuySettings.eggsEnabled) {
+      await runAutoBuyCheckFromUi("egg");
+    }
+  }
+);
+
+const toolsToggle = createCompactToggleButton(
+  "Tools",
+  autoBuySettings.toolsEnabled,
+  async () => {
+    autoBuySettings.toolsEnabled = !autoBuySettings.toolsEnabled;
+    saveAutoBuySettings(autoBuySettings);
+    updateCompactToggleButton(toolsToggle, "Tools", autoBuySettings.toolsEnabled);
+
+    showStatus(autoBuyStatus, {
+      success: true,
+      message: `Tool auto-buy ${autoBuySettings.toolsEnabled ? "enabled" : "disabled"}.`
+    });
+
+    if (autoBuySettings.enabled && autoBuySettings.toolsEnabled) {
+      await runAutoBuyCheckFromUi("tool");
+    }
+  }
+);
+
+toggleRow.append(
+  masterToggle,
+  seedsToggle,
+  eggsToggle,
+  toolsToggle
+);
 
   const refreshOptionsButton = createActionButton("Refresh shop options");
   refreshOptionsButton.style.width = "100%";
@@ -60051,22 +60084,19 @@ function renderAutoBuyTab(view, ui) {
   });
 
   autoBuyCard.body.append(
-    masterRow.row,
-    seedsRow.row,
-    eggsRow.row,
-    toolsRow.row,
-    refreshOptionsButton,
-    eggsTitle,
-    eggsHint,
-    eggsChips,
-    seedsTitle,
-    seedsHint,
-    seedsChips,
-    toolsTitle,
-    toolsHint,
-    toolsChips,
-    autoBuyStatus
-  );
+  toggleRow,
+  refreshOptionsButton,
+  eggsTitle,
+  eggsHint,
+  eggsChips,
+  seedsTitle,
+  seedsHint,
+  seedsChips,
+  toolsTitle,
+  toolsHint,
+  toolsChips,
+  autoBuyStatus
+);
 
   layout.appendChild(autoBuyCard.root);
   view.appendChild(layout);
@@ -60307,14 +60337,27 @@ function renderAutoBuyTab(view, ui) {
 }
 
 function renderAutoBuyMenu(container) {
-    container.classList.add("autobuy-compact-root");
-    ensureAutoBuyCompactStyles();
+  container.classList.add("autobuy-compact-root");
+  ensureAutoBuyCompactStyles();
+
   const ui = new Menu({ id: "autobuy", compact: true });
   ui.mount(container);
+
   ui.addTabs([
     { id: "autobuy-main", title: "AutoBuy", render: (root) => renderAutoBuyTab(root, ui) }
   ]);
+
   ui.switchTo("autobuy-main");
+
+  // hide top bar
+  if (ui.tabBar) {
+    ui.tabBar.style.display = "none";
+  }
+
+  // no top tab
+  if (ui.root) {
+    ui.root.classList.add("qmm-no-tabs");
+  }
 }
   function renderSettingsMenu(container) {
     const ui = new Menu({ id: "settings", compact: true });
