@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoBuy
 // @namespace    Quinoa
-// @version      2.0.2
+// @version      2.0.3
 // @description  AutoBuy for Magic Garden
 // @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
@@ -47976,43 +47976,6 @@ async function initAutoBuyShops() {
   }
 
   startAutoBuyPolling();
-
-  console.log("[AutoBuy] initialized", autoBuySettings);
-}
-
-async function initAutoBuyShops() {
-    console.log("[AutoBuy] initAutoBuyShops called");
-  try {
-    const initialSeedShop = await Atoms.shop.seedShop.get();
-      console.log("[AutoBuy][Initial seedShop raw]", initialSeedShop);
-    await handleSeedAutoBuy(initialSeedShop);
-  } catch (err) {
-    console.warn("[AutoBuy] failed to read initial seed shop", err);
-  }
-
-  try {
-    await Atoms.shop.seedShop.onChange(async (next) => {
-      await handleSeedAutoBuy(next);
-    });
-  } catch (err) {
-    console.warn("[AutoBuy] failed to subscribe to seed shop", err);
-  }
-
-  try {
-    const initialEggShop = await Atoms.shop.eggShop.get();
-      console.log("[AutoBuy][Initial eggShop raw]", initialEggShop);
-    await handleEggAutoBuy(initialEggShop);
-  } catch (err) {
-    console.warn("[AutoBuy] failed to read initial egg shop", err);
-  }
-
-  try {
-    await Atoms.shop.eggShop.onChange(async (next) => {
-      await handleEggAutoBuy(next);
-    });
-  } catch (err) {
-    console.warn("[AutoBuy] failed to subscribe to egg shop", err);
-  }
 
   console.log("[AutoBuy] initialized", autoBuySettings);
 }
